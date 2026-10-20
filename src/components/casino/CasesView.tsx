@@ -9,7 +9,7 @@ import { haptic, notify, openShare } from "@/lib/telegram"
 import { cn } from "@/lib/utils"
 import { useLive } from "@/lib/live"
 import { MUTATION_BY_ID, mutatedValue, type MutationId } from "@/data/mutations"
-import { BRAINROT_BY_ID } from "@/data/brainrots"
+import { BRAINROT_BY_ID, TIER_META, type Tier } from "@/data/brainrots"
 import { CoinAmount, BrainrotCard, DropCard, cdnImage, dropLabel, dropValue, Coin, formatCoins } from "./ui"
 
 const STRIP_LEN = 56
@@ -73,18 +73,47 @@ export function SectionTitle({ icon, title, hint }: { icon: React.ReactNode; tit
   )
 }
 
+const KIND_BADGE: Record<string, string> = { free: "FREE", tag: "ТЕГ", referral: "ДРУЗЬЯ" }
+
+function shortCoins(n: number) {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`
+  if (n >= 10_000) return `${Math.round(n / 1000)}K`
+  if (n >= 1000) return `${+(n / 1000).toFixed(1)}K`
+  return String(Math.round(n))
+}
+
+/** Tier composition of a case: how many brainrots of each tier are inside. */
+function useCaseMeta(c: CaseDef) {
+  return useMemo(() => {
+    const counts = new Map<Tier | "coins", number>()
+    let top = 0
+    for (const e of c.entries) {
+      const key = e.drop.kind === "brainrot" ? (BRAINROT_BY_ID[e.drop.id]?.tier ?? "rare") : "coins"
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+      top = Math.max(top, dropValue(e.drop))
+    }
+    const order: (Tier | "coins")[] = ["coins", "rare", "epic", "legendary", "mythic", "og"]
+    const segments = order.filter((k) => counts.has(k)).map((k) => ({ key: k, n: counts.get(k) ?? 0, color: k === "coins" ? "var(--bd-gold)" : TIER_META[k].color }))
+    const rots = c.entries.filter((e) => e.drop.kind === "brainrot").length
+    return { segments, top, rots }
+  }, [c])
+}
+
 function CaseTile({ c, onOpen }: { c: CaseDef; onOpen: () => void }) {
-  const { caseReadyAt } = useStore()
+  const { caseReadyAt, freeCases } = useStore()
+  const { streamer } = useLive()
   const now = useNow()
   const readyAt = caseReadyAt(c)
   const locked = readyAt > now
   const small = c.kind !== "paid"
+  const gifted = freeCases[c.id] ?? 0
+  const meta = useCaseMeta(c)
   // Two rarest brainrots peek out from behind the cover, like a Steal a Brainrot pedestal.
   const peek = useMemo(
     () =>
       sortedEntries(c)
         .filter((e) => e.drop.kind === "brainrot")
-        .slice(-2)
+        .slice(0, 2)
         .map((e) => (e.drop.kind === "brainrot" ? BRAINROT_BY_ID[e.drop.id] : null))
         .filter(Boolean),
     [c],
@@ -96,13 +125,24 @@ function CaseTile({ c, onOpen }: { c: CaseDef; onOpen: () => void }) {
         haptic()
         onOpen()
       }}
-      className="bd-case group text-center"
+      className={cn("bd-case group text-center", small && "bd-case-sm")}
       style={{ ["--case" as string]: c.accent }}
     >
       <span className="bd-case-rays" />
       <span className="bd-halftone" />
-      {!small && <span className="bd-case-tag">BRAINROT</span>}
-      <div className={cn("relative mt-1 grid place-items-center", small ? "h-16" : "h-28")}>
+      <span className="bd-case-shine" />
+      <div className="relative z-[2] flex w-full items-start justify-between gap-1">
+        {small ? (
+          <span className="bd-case-chip">{KIND_BADGE[c.kind] ?? "BONUS"}</span>
+        ) : (
+          <span className="bd-case-chip">
+            ДО <Coin size={10} /> {streamer ? "•••" : shortCoins(meta.top)}
+          </span>
+        )}
+        {gifted > 0 && <span className="bd-case-gift">🎁×{gifted}</span>}
+      </div>
+      <div className={cn("relative mt-1 grid w-full place-items-center", small ? "h-[72px]" : "h-32")}>
+        <span className="bd-case-halo" />
         {!small &&
           peek.map((b, i) =>
             b ? (
@@ -111,32 +151,47 @@ function CaseTile({ c, onOpen }: { c: CaseDef; onOpen: () => void }) {
                 src={cdnImage(b.image, 120)}
                 alt=""
                 loading="lazy"
-                className={cn("absolute bottom-0 size-14 object-contain opacity-90 drop-shadow-[0_4px_6px_rgba(0,0,0,.6)]", i === 0 ? "-left-1 -rotate-12" : "-right-1 rotate-12")}
+                className={cn(
+                  "absolute bottom-1 z-[1] size-14 object-contain drop-shadow-[0_4px_6px_rgba(0,0,0,.7)] transition-transform duration-300",
+                  i === 0 ? "-left-1 -rotate-12 group-hover:-translate-x-1" : "-right-1 rotate-12 group-hover:translate-x-1",
+                )}
               />
             ) : null,
           )}
         <img
-          src={cdnImage(c.cover, small ? 160 : 240)}
+          src={cdnImage(c.cover, small ? 160 : 260)}
           alt=""
           loading="lazy"
           decoding="async"
-          className={cn("bd-sticker relative object-contain transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-6", small ? "size-16" : "size-28")}
+          className={cn("bd-sticker bd-case-art relative z-[2] object-contain", small ? "size-[72px]" : "size-32")}
         />
         <span className="bd-pedestal" />
       </div>
-      <div className={cn("bd-case-title relative mt-2", small ? "text-[11px]" : "text-[15px]")}>{c.name}</div>
-      {!small && <div className="relative mt-0.5 text-[11px] font-semibold text-white/60">{c.subtitle}</div>}
-      <div className="relative mt-2">
-        {c.kind === "paid" ? (
-          <span className="bd-case-price">
+      <div className={cn("bd-case-title relative z-[2] mt-2", small ? "text-[11px]" : "text-[15px]")}>{c.name}</div>
+      {!small && <div className="relative z-[2] mt-0.5 line-clamp-1 text-[11px] font-semibold text-white/60">{c.subtitle}</div>}
+      {!small && (
+        <div className="relative z-[2] mt-2 w-full">
+          <div className="bd-case-bar">
+            {meta.segments.map((sg) => (
+              <span key={sg.key} style={{ flexGrow: sg.n, background: sg.color }} />
+            ))}
+          </div>
+          <div className="mt-1 text-[9px] font-bold uppercase tracking-wider text-white/45">{meta.rots} брейнротов внутри</div>
+        </div>
+      )}
+      <div className="relative z-[2] mt-2 w-full">
+        {gifted > 0 ? (
+          <span className="bd-case-open w-full">ПОДАРОК</span>
+        ) : c.kind === "paid" ? (
+          <span className="bd-case-price w-full justify-center">
             <CoinAmount value={c.price} size={15} className="text-sm" />
           </span>
         ) : locked ? (
-          <span className="inline-flex items-center gap-1 rounded-lg bg-black/45 px-2 py-1 text-[10px] font-bold tabular-nums text-white/70">
+          <span className="inline-flex w-full items-center justify-center gap-1 rounded-lg bg-black/45 px-2 py-1 text-[10px] font-bold tabular-nums text-white/70">
             <Clock className="size-3" /> {fmtLeft(readyAt - now)}
           </span>
         ) : (
-          <span className="bd-case-open">ОТКРЫТЬ</span>
+          <span className="bd-case-open w-full">ОТКРЫТЬ</span>
         )}
       </div>
     </button>
@@ -227,12 +282,16 @@ function CaseModal({ c, onClose }: { c: CaseDef; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[100] flex flex-col bg-[#07040f]/95 backdrop-blur-sm">
       <div className="mx-auto flex w-full max-w-xl flex-1 flex-col overflow-y-auto px-4 pb-8 pt-4 no-scrollbar">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="font-heading text-lg font-extrabold">{c.name}</div>
-            <div className="text-xs text-white/50">{c.subtitle}</div>
+        <div className="bd-case-hero" style={{ ["--case" as string]: c.accent }}>
+          <span className="bd-case-rays" />
+          <span className="bd-halftone" />
+          <img src={cdnImage(c.cover, 260)} alt="" className="bd-sticker bd-float relative z-[2] size-24 shrink-0 object-contain" />
+          <div className="relative z-[2] min-w-0 flex-1">
+            <div className="bd-case-title text-xl">{c.name}</div>
+            <div className="mt-1 text-xs text-white/65">{c.subtitle}</div>
+            {gifted > 0 && <div className="mt-2 inline-flex rounded-lg bg-black/40 px-2 py-1 text-[11px] font-bold text-[var(--bd-gold)]">🎁 Подарков: {gifted}</div>}
           </div>
-          <button type="button" onClick={onClose} disabled={spinning} className="bd-btn-ghost grid size-10 place-items-center" aria-label="Закрыть">
+          <button type="button" onClick={onClose} disabled={spinning} className="bd-btn-ghost relative z-[2] grid size-10 shrink-0 place-items-center self-start" aria-label="Закрыть">
             <X className="size-5" />
           </button>
         </div>

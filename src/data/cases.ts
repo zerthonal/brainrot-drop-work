@@ -70,7 +70,6 @@ function split(coinDrops: number[], coinShare: number, rots: Brainrot[]): CaseEn
   ]
 }
 
-const cover = (id: string) => BRAINROT_BY_ID[id]?.image ?? BRAINROTS[0].image
 const art = (name: string) => `/img/cases/${name}.webp`
 
 // Paid case price sits between the cheapest drop and the average drop value, then
