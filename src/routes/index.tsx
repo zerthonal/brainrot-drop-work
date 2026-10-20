@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { Box, Crown, Dices, EyeOff, Megaphone, Plus, Rocket, Settings, TrendingUp, User, X } from 'lucide-react'
+import { Box, ChevronRight, Crown, Dices, Ellipsis, EyeOff, Megaphone, Plus, Rocket, Settings, Ticket, TrendingUp, User, X } from 'lucide-react'
 import { OwnerView } from '@/components/casino/OwnerView'
 import { isOwner } from '@/lib/tg-auth'
 import { setStreamer, useLive } from '@/lib/live'
@@ -18,6 +18,9 @@ import { UpgraderView } from '@/components/casino/UpgraderView'
 import { DiceView } from '@/components/casino/DiceView'
 import { CrashView } from '@/components/casino/CrashView'
 import { ProfileView } from '@/components/casino/ProfileView'
+import { BattlePassView } from '@/components/casino/BattlePassView'
+import { itemValue } from '@/lib/store'
+import { TRACKS, tierProgress } from '@/data/battlepass'
 import { BrainrotImg, Coin, CoinAmount, IncomeTag, cdnImage } from '@/components/casino/ui'
 
 export const Route = createFileRoute('/')({
@@ -34,10 +37,11 @@ export const Route = createFileRoute('/')({
   component: App,
 })
 
-type TabId = 'cases' | 'upgrade' | 'dice' | 'crash' | 'profile' | 'owner'
+type TabId = 'cases' | 'battlepass' | 'upgrade' | 'dice' | 'crash' | 'profile' | 'owner'
 
 const TABS: { id: TabId; label: string; icon: typeof Box }[] = [
   { id: 'cases', label: 'Кейсы', icon: Box },
+  { id: 'battlepass', label: 'Батл пасс', icon: Ticket },
   { id: 'upgrade', label: 'Апгрейд', icon: TrendingUp },
   { id: 'crash', label: 'Crash', icon: Rocket },
   { id: 'dice', label: 'Dice', icon: Dices },
@@ -68,11 +72,13 @@ function Shell() {
   }, [])
   const tabs = owner ? [...TABS, { id: 'owner' as TabId, label: 'Разраб', icon: Crown }] : TABS
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [tab, setTab] = useState<TabId>('cases')
   // Game views stay mounted so a running Crash round or upgrade isn't lost on tab switch.
   const [visited, setVisited] = useState<Set<TabId>>(() => new Set(['cases']))
   const go = (id: TabId) => {
     haptic()
+    setMenuOpen(false)
     setTab(id)
     setVisited((v) => (v.has(id) ? v : new Set(v).add(id)))
     window.scrollTo({ top: 0 })
@@ -81,19 +87,21 @@ function Shell() {
   if (maint.on && !owner) return <MaintenanceScreen text={maint.text} />
 
   return (
-    <div className="bd-bg min-h-dvh pb-28">
+    <div className="bd-bg min-h-dvh pb-10">
       {maint.on && owner && (
         <div className="bg-[var(--bd-gold)] px-4 py-1.5 text-center text-[11px] font-extrabold text-black">Тех. перерыв включён — сайт видишь только ты</div>
       )}
-      <Header onDeposit={() => go('profile')} onSettings={() => setSettingsOpen(true)} />
+      <Header onDeposit={() => go('profile')} onMenu={() => { haptic(); setMenuOpen(true) }} />
       <UpdateBanner />
       <LiveFeed />
       <main className="mx-auto max-w-xl px-4 pt-4">
         {tab === 'cases' && <Hero onPlay={() => go('upgrade')} />}
+        {tab === 'cases' && <BattlePassPromo onOpen={() => go('battlepass')} />}
         {tabs.map(({ id }) =>
           visited.has(id) ? (
             <section key={id} hidden={tab !== id} className={cn(tab === 'cases' && id === 'cases' && 'mt-6')}>
               {id === 'cases' && <CasesView />}
+              {id === 'battlepass' && <BattlePassView />}
               {id === 'upgrade' && <UpgraderView />}
               {id === 'crash' && <CrashView />}
               {id === 'dice' && <DiceView />}
@@ -104,7 +112,18 @@ function Shell() {
         )}
         <Footer />
       </main>
-      <BottomNav tabs={tabs} tab={tab} onChange={go} />
+      {menuOpen && (
+        <CornerMenu
+          tabs={tabs}
+          tab={tab}
+          onChange={go}
+          onClose={() => setMenuOpen(false)}
+          onSettings={() => {
+            setMenuOpen(false)
+            setSettingsOpen(true)
+          }}
+        />
+      )}
       {settingsOpen && <SettingsSheet onClose={() => setSettingsOpen(false)} />}
     </div>
   )
@@ -199,16 +218,16 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
   )
 }
 
-function Header({ onDeposit, onSettings }: { onDeposit: () => void; onSettings: () => void }) {
+function Header({ onDeposit, onMenu }: { onDeposit: () => void; onMenu: () => void }) {
   const { balance } = useStore()
   return (
     <header className="sticky top-0 z-40 border-b border-white/6 bg-[#0b0716]/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-xl items-center justify-between gap-3 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <div className="relative grid size-9 place-items-center rounded-xl bg-gradient-to-br from-[#ff4fd8] to-[#7c3aed] shadow-[0_0_20px_rgba(255,79,216,.45)]">
-            <img src={cdnImage(BRAINROT_BY_ID['strawberry-elephant'].image, 72)} alt="" className="size-8 object-contain" />
-          </div>
-          <div className="font-heading text-[17px] font-extrabold leading-none tracking-tight">
+        <div className="flex items-center gap-2.5">
+          <button type="button" onClick={onMenu} className="bd-dots" aria-label="Открыть меню">
+            <Ellipsis className="size-6" strokeWidth={3.5} />
+          </button>
+          <div className="font-heading text-[16px] font-extrabold leading-none tracking-tight">
             Brainrot<span className="text-[var(--bd-lime)]">Drop</span>
           </div>
         </div>
@@ -217,12 +236,101 @@ function Header({ onDeposit, onSettings }: { onDeposit: () => void; onSettings: 
           <button type="button" onClick={onDeposit} className="bd-btn grid size-8 place-items-center !rounded-lg !shadow-none" aria-label="Пополнить">
             <Plus className="size-4" />
           </button>
-          <button type="button" onClick={onSettings} className="bd-btn-ghost grid size-8 place-items-center !rounded-lg" aria-label="Настройки">
-            <Settings className="size-4" />
-          </button>
         </div>
       </div>
     </header>
+  )
+}
+
+function CornerMenu({
+  tabs,
+  tab,
+  onChange,
+  onClose,
+  onSettings,
+}: {
+  tabs: typeof TABS
+  tab: TabId
+  onChange: (t: TabId) => void
+  onClose: () => void
+  onSettings: () => void
+}) {
+  const { user, balance, inventory } = useStore()
+  const invValue = inventory.reduce((s, i) => s + itemValue(i), 0)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <>
+      <div className="fixed inset-0 z-[55] bg-black/60 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="bd-menu" role="dialog" aria-label="Меню">
+        <div className="mb-2 flex items-center justify-between">
+          <button type="button" onClick={onClose} className="bd-dots !size-9" aria-label="Закрыть меню">
+            <X className="size-5" strokeWidth={3} />
+          </button>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider text-white/40">Меню</span>
+        </div>
+        <button type="button" className="bd-profile-banner" onClick={() => onChange('profile')}>
+          {user.photoUrl ? (
+            <img src={user.photoUrl} alt="" className="size-14 shrink-0 rounded-2xl object-cover ring-2 ring-white/30" />
+          ) : (
+            <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-fuchsia-500 to-violet-700 font-heading text-xl font-extrabold ring-2 ring-white/30">
+              {user.firstName.slice(0, 1)}
+            </span>
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-heading text-base font-extrabold">
+              {user.firstName} {user.lastName}
+            </span>
+            <span className="block truncate text-[11px] text-white/60">{user.username ? `@${user.username}` : `ID ${user.id}`}</span>
+            <span className="mt-1.5 flex items-center gap-2">
+              <CoinAmount value={balance} size={13} className="text-xs" />
+              <span className="text-[10px] text-white/45">инв.</span>
+              <CoinAmount value={invValue} size={13} className="text-xs" />
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-0.5 text-[10px] font-extrabold uppercase text-[var(--bd-lime)]">
+            Профиль <ChevronRight className="size-4" />
+          </span>
+        </button>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button key={id} type="button" className="bd-menu-item" data-active={tab === id} onClick={() => onChange(id)}>
+              <Icon className="size-5" />
+              {label}
+            </button>
+          ))}
+          <button type="button" className="bd-menu-item" onClick={onSettings}>
+            <Settings className="size-5" />
+            Настройки
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function BattlePassPromo({ onOpen }: { onOpen: () => void }) {
+  const { stats, bp } = useStore()
+  const ready = (['free', 'premium'] as const).reduce(
+    (n, t) => n + TRACKS[t].filter((x) => !bp.claimed[t].includes(x.id) && tierProgress(t, x, stats, bp).done && (t === 'free' || bp.premium)).length,
+    0,
+  )
+  return (
+    <button type="button" onClick={onOpen} className="bd-bp-hero mt-4 flex w-full items-center gap-3 !p-3 text-left">
+      <img src="/img/battlepass.webp" alt="" className="size-14 shrink-0 object-contain" loading="lazy" />
+      <span className="min-w-0 flex-1">
+        <span className="block font-heading text-sm font-extrabold">Батл пасс</span>
+        <span className="block text-[11px] text-white/60">Бесплатная и премиум дорожки с квестами</span>
+      </span>
+      {ready > 0 ? (
+        <span className="shrink-0 rounded-lg bg-[var(--bd-gold)] px-2 py-1 text-[10px] font-extrabold text-black">Забрать: {ready}</span>
+      ) : (
+        <ChevronRight className="size-5 shrink-0 text-white/50" />
+      )}
+    </button>
   )
 }
 
@@ -318,30 +426,5 @@ function Footer() {
       BrainrotDrop — фан-проект, не связан с Roblox Corporation. Монеты — внутриигровая валюта сайта и не выводятся в деньги.
       Данные и изображения персонажей — Steal a Brainrot Wiki (Fandom). 18+
     </p>
-  )
-}
-
-function BottomNav({ tabs, tab, onChange }: { tabs: typeof TABS; tab: TabId; onChange: (t: TabId) => void }) {
-  return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/8 bg-[#0b0716]/92 pb-[max(env(safe-area-inset-bottom),8px)] backdrop-blur-md">
-      <div className={cn('mx-auto grid max-w-xl px-2 pt-2', tabs.length > 5 ? 'grid-cols-6' : 'grid-cols-5')}>
-        {tabs.map(({ id, label, icon: Icon }) => {
-          const active = tab === id
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onChange(id)}
-              className={cn('flex flex-col items-center gap-1 rounded-xl py-1.5 text-[10px] font-bold transition-colors', active ? 'text-[var(--bd-lime)]' : 'text-white/45')}
-            >
-              <span className={cn('grid size-9 place-items-center rounded-xl transition-all', active && 'bg-[var(--bd-lime)]/12 shadow-[0_0_18px_rgba(182,255,59,.25)]')}>
-                <Icon className="size-5" />
-              </span>
-              {label}
-            </button>
-          )
-        })}
-      </div>
-    </nav>
   )
 }
