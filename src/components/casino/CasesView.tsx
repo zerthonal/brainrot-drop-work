@@ -184,6 +184,8 @@ function CaseModal({ c, onClose }: { c: CaseDef; onClose: () => void }) {
       if (gate || cooldownLeft > 0) return
       store.claimCase(c)
     }
+    store.track("cases")
+    store.track(c.kind === "paid" ? "paidCases" : "bonusCases")
     haptic("medium")
     const result = rollCase(c)
     const next = buildStrip(c)

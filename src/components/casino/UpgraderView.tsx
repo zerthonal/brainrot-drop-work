@@ -55,6 +55,7 @@ export function UpgraderView() {
     }
     setLocked({ chance, value: inputValue, multiplier: liveMultiplier })
     if (input) store.removeItems([input.uid])
+    store.track("upgrades")
     haptic("medium")
     setResult(null)
     setSpinning(true)
@@ -68,6 +69,7 @@ export function UpgraderView() {
       setResult(win ? "win" : "lose")
       if (win) {
         store.grant({ kind: "brainrot", id: target.id }, { source: "Апгрейд" })
+        store.track("upgradeWins")
         notify("success")
         toast.success(`Апгрейд удался! ${target.name} в инвентаре`)
       } else {

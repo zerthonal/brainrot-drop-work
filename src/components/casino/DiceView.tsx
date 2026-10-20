@@ -42,6 +42,7 @@ export function DiceView() {
       toast.error("Недостаточно монет")
       return
     }
+    store.track("dice")
     haptic("medium")
     setRolling(true)
     setLast(null)
@@ -54,6 +55,7 @@ export function DiceView() {
       const payout = win ? Math.floor(bet * COLORS[pick].mult) : 0
       if (win) {
         store.credit(payout)
+        store.track("diceWins")
         notify("success")
       } else notify("error")
       setLast({ color: face.color, win, payout })

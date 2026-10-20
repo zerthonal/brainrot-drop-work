@@ -154,6 +154,7 @@ export function CrashView() {
       toast.error("Недостаточно монет")
       return
     }
+    store.track("crash")
     haptic("medium")
     setFlyerIdx(Math.floor(Math.random() * FLYERS.length))
     setCashedAt(null)
@@ -188,6 +189,7 @@ export function CrashView() {
     const m = at ?? r.mult
     const win = Math.floor(r.bet * m)
     store.credit(win)
+    store.track("crashWins")
     setCashedAt(m)
     notify("success")
     toast.success(`Забрал x${m.toFixed(2)} → +${win} монет`)
