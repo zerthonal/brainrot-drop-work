@@ -163,10 +163,7 @@ export const ownerDeletePromo = createServerFn({ method: "POST" })
 
 export const BACKUP_VERSION = 1
 
-export const ownerExportBackup = createServerFn({ method: "POST" })
-  .inputValidator((d) => z.object({ initData: z.string().max(4096) }).parse(d))
-  .handler(async ({ data }) => {
-    await requireOwner(data.initData)
+async function buildBackup() {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
     const players: unknown[] = []
     for (let from = 0; ; from += 1000) {
@@ -195,6 +192,32 @@ export const ownerExportBackup = createServerFn({ method: "POST" })
       pendingGrants: grants ?? [],
       priceOverrides: settings?.price_overrides ?? {},
     })
+}
+
+export const ownerExportBackup = createServerFn({ method: "POST" })
+  .inputValidator((d) => z.object({ initData: z.string().max(4096) }).parse(d))
+  .handler(async ({ data }) => {
+    await requireOwner(data.initData)
+    return buildBackup()
+  })
+
+/** Sends the backup file to the owner's chat with the bot, so it is kept in Telegram. */
+export const ownerSendBackupToTelegram = createServerFn({ method: "POST" })
+  .inputValidator((d) => z.object({ initData: z.string().max(4096) }).parse(d))
+  .handler(async ({ data }) => {
+    const u = await requireOwner(data.initData)
+    const json = await buildBackup()
+    const token = process.env["TELEGRAM_BOT_TOKEN"]
+    if (!token) throw new Error("Бот не настроен")
+    const count = (JSON.parse(json) as { players: unknown[] }).players.length
+    const form = new FormData()
+    form.append("chat_id", String(u.id))
+    form.append("caption", `Бэкап BrainrotDrop · игроков: ${count} · ${new Date().toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })} МСК`)
+    form.append("document", new Blob([json], { type: "application/json" }), `brainrotdrop-backup-${new Date().toISOString().slice(0, 10)}.json`)
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form })
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; description?: string } | null
+    if (!body?.ok) throw new Error(body?.description ? `Telegram: ${body.description}` : "Не удалось отправить файл — напиши боту /start")
+    return { ok: true, players: count }
   })
 
 const playerRow = z.object({
@@ -232,7 +255,8 @@ export const ownerImportBackup = createServerFn({ method: "POST" })
           tg_id: p.tg_id,
           first_name: p.first_name ?? "",
           username: p.username ?? null,
-          state: p.state as never,
+          // Fresh savedAt so the restored copy wins over any older copy cached on the device.
+          state: { ...p.state, savedAt: Date.now() } as never,
           ...(p.created_at ? { created_at: p.created_at } : {}),
           updated_at: new Date().toISOString(),
         })),
