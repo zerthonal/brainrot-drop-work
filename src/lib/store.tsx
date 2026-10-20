@@ -12,6 +12,7 @@ import { toast } from "sonner"
 import { getSettings } from "./owner.functions"
 import { applyPriceOverrides, initStreamer, useLive } from "./live"
 import { rollMutation, mutatedValue, type MutationId } from "@/data/mutations"
+import { EMPTY_BP, PREMIUM_PRICE, TRACKS, canClaim, normalizeBp, type BpReward, type BpState, type StatKey, type Stats, type TrackId } from "@/data/battlepass"
 
 // New players start from zero: no coins, no brainrots.
 export const START_BALANCE = 0
@@ -24,6 +25,8 @@ interface SavedState {
   requests: TransferRequest[]
   cooldowns: Record<string, number>
   freeCases?: Record<string, number>
+  stats?: Stats
+  bp?: BpState
   savedAt: number
 }
 
@@ -82,6 +85,11 @@ interface Store {
   caseReadyAt: (c: CaseDef) => number
   requestDeposit: (brainrotId: string, robloxNick: string, creditAs: "coins" | "brainrot") => void
   requestWithdraw: (uid: string, robloxNick: string) => void
+  stats: Stats
+  bp: BpState
+  track: (stat: StatKey, n?: number) => void
+  buyPremium: () => boolean
+  claimBp: (track: TrackId, tierId: string) => BpReward | null
 }
 
 // Keep one context across hot reloads so the provider and consumers always match.
@@ -98,6 +106,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [cooldowns, setCooldowns] = useState<Record<string, number>>({})
   const [freeCases, setFreeCases] = useState<Record<string, number>>({})
   const [announcement, setAnnouncement] = useState<Announcement | null>(null)
+  const [stats, setStats] = useState<Stats>({})
+  const [bp, setBp] = useState<BpState>(EMPTY_BP)
   const { priceVersion } = useLive()
 
   const refreshSettings = useCallback(async () => {
@@ -143,6 +153,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (Array.isArray(st.requests)) setRequests(st.requests)
     if (st.cooldowns && typeof st.cooldowns === "object") setCooldowns(st.cooldowns)
     if (st.freeCases && typeof st.freeCases === "object") setFreeCases(st.freeCases)
+    if (st.stats && typeof st.stats === "object") setStats(st.stats)
+    if (st.bp) setBp(normalizeBp(st.bp))
   }, [])
 
   useEffect(() => {
@@ -174,7 +186,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [apply])
 
   const snapshot = useRef<SavedState | null>(null)
-  snapshot.current = { balance, inventory, requests, cooldowns, freeCases, savedAt: Date.now() }
+  snapshot.current = { balance, inventory, requests, cooldowns, freeCases, stats, bp, savedAt: Date.now() }
   const lastSent = useRef("")
 
   const persistRef = useRef<() => void>(() => {})
@@ -257,12 +269,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Ref mirrors balance so rapid consecutive bets can't overspend between renders.
   const balanceRef = useRef(balance)
   balanceRef.current = balance
-  const spend = useCallback((n: number) => {
-    if (n <= 0 || balanceRef.current < n) return false
-    balanceRef.current -= n
-    setBalance((b) => b - n)
-    return true
+  const track = useCallback((stat: StatKey, n = 1) => {
+    if (n <= 0) return
+    setStats((s) => ({ ...s, [stat]: (s[stat] ?? 0) + n }))
   }, [])
+
+  const spend = useCallback(
+    (n: number) => {
+      if (n <= 0 || balanceRef.current < n) return false
+      balanceRef.current -= n
+      setBalance((b) => b - n)
+      track("spent", n)
+      return true
+    },
+    [track],
+  )
 
   const credit = useCallback((n: number) => setBalance((b) => b + n), [])
 
@@ -276,10 +297,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     }
     const mutation = opts?.mutate ? rollMutation() : undefined
+    track("brainrots")
+    if (mutation) track("mutations")
     const item: InvItem = { uid: uid(), brainrotId: d.id, obtainedAt: Date.now(), status: "owned", ...(mutation ? { mutation } : {}) }
     setInventory((inv) => [item, ...inv])
     return item
-  }, [])
+  }, [track])
 
   const removeItems = useCallback((uids: string[]) => {
     setInventory((inv) => inv.filter((i) => !uids.includes(i.uid)))
@@ -338,6 +361,38 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     )
   }, [])
 
+  const statsRef = useRef(stats)
+  statsRef.current = stats
+  const bpRef = useRef(bp)
+  bpRef.current = bp
+
+  // Buying the pass is not counted as "spent" so it can't complete spend quests by itself.
+  const buyPremium = useCallback(() => {
+    if (bpRef.current.premium || balanceRef.current < PREMIUM_PRICE) return false
+    balanceRef.current -= PREMIUM_PRICE
+    setBalance((b) => b - PREMIUM_PRICE)
+    const next = { ...bpRef.current, premium: true, premiumBase: { ...statsRef.current } }
+    bpRef.current = next
+    setBp(next)
+    setTimeout(() => persistRef.current(), 300)
+    return true
+  }, [])
+
+  const claimBp = useCallback((trackId: TrackId, tierId: string) => {
+    if (canClaim(trackId, tierId, statsRef.current, bpRef.current) !== "ok") return null
+    const tier = TRACKS[trackId].find((t) => t.id === tierId)
+    if (!tier) return null
+    const next = { ...bpRef.current, claimed: { ...bpRef.current.claimed, [trackId]: [...bpRef.current.claimed[trackId], tierId] } }
+    bpRef.current = next
+    setBp(next)
+    const r = tier.reward
+    if (r.kind === "coins") setBalance((b) => b + r.amount)
+    else if (r.kind === "case") setFreeCases((fc) => ({ ...fc, [r.caseId]: (fc[r.caseId] ?? 0) + r.amount }))
+    else if (BRAINROT_BY_ID[r.id]) setInventory((inv) => [{ uid: uid(), brainrotId: r.id, obtainedAt: Date.now(), status: "owned" }, ...inv])
+    setTimeout(() => persistRef.current(), 300)
+    return r
+  }, [])
+
   const value = useMemo<Store>(
     () => ({
       user,
@@ -364,8 +419,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       announcement,
       refreshSettings,
       priceVersion,
+      stats,
+      bp,
+      track,
+      buyPremium,
+      claimBp,
     }),
-    [tradeItem, freeCases, consumeFreeCase, announcement, refreshSettings, priceVersion, user, inTelegram, balance, inventory, requests, cooldowns, hasTag, spend, credit, grant, removeItems, sellItem, claimCase, caseReadyAt, requestDeposit, requestWithdraw],
+    [stats, bp, track, buyPremium, claimBp, tradeItem, freeCases, consumeFreeCase, announcement, refreshSettings, priceVersion, user, inTelegram, balance, inventory, requests, cooldowns, hasTag, spend, credit, grant, removeItems, sellItem, claimCase, caseReadyAt, requestDeposit, requestWithdraw],
   )
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
