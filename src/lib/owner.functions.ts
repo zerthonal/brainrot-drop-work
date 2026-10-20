@@ -158,3 +158,102 @@ export const ownerDeletePromo = createServerFn({ method: "POST" })
     await supabaseAdmin.from("promo_codes").delete().eq("code", data.code)
     return { ok: true }
   })
+
+// ---- Backup: export / import all player data so it survives moving to a new site ----
+
+export const BACKUP_VERSION = 1
+
+export const ownerExportBackup = createServerFn({ method: "POST" })
+  .inputValidator((d) => z.object({ initData: z.string().max(4096) }).parse(d))
+  .handler(async ({ data }) => {
+    await requireOwner(data.initData)
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
+    const players: unknown[] = []
+    for (let from = 0; ; from += 1000) {
+      const { data: rows, error } = await supabaseAdmin
+        .from("players")
+        .select("tg_id, first_name, username, state, created_at, updated_at")
+        .order("tg_id")
+        .range(from, from + 999)
+      if (error) throw new Error(error.message)
+      players.push(...(rows ?? []))
+      if (!rows || rows.length < 1000) break
+    }
+    const [{ data: promos }, { data: redemptions }, { data: grants }, { data: settings }] = await Promise.all([
+      supabaseAdmin.from("promo_codes").select("*"),
+      supabaseAdmin.from("promo_redemptions").select("*"),
+      supabaseAdmin.from("pending_grants").select("tg_id, kind, amount, case_id, note, created_at").is("claimed_at", null),
+      supabaseAdmin.from("app_settings").select("price_overrides").eq("id", 1).maybeSingle(),
+    ])
+    return JSON.stringify({
+      app: "brainrotdrop",
+      version: BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      players,
+      promoCodes: promos ?? [],
+      promoRedemptions: redemptions ?? [],
+      pendingGrants: grants ?? [],
+      priceOverrides: settings?.price_overrides ?? {},
+    })
+  })
+
+const playerRow = z.object({
+  tg_id: z.number().int(),
+  first_name: z.string().max(256).nullable().optional(),
+  username: z.string().max(256).nullable().optional(),
+  state: z.record(z.string(), z.unknown()),
+  created_at: z.string().max(64).optional(),
+})
+
+const importSchema = z.object({
+  initData: z.string().max(4096),
+  players: z.array(playerRow).max(500),
+  promoCodes: z
+    .array(z.object({ code: z.string().max(32), coins: z.number(), max_uses: z.number().int(), uses: z.number().int(), active: z.boolean() }))
+    .max(1000)
+    .optional(),
+  promoRedemptions: z.array(z.object({ code: z.string().max(32), tg_id: z.number().int() })).max(20000).optional(),
+  pendingGrants: z
+    .array(z.object({ tg_id: z.number().int(), kind: z.enum(["coins", "case"]), amount: z.number(), case_id: z.string().max(80).nullable(), note: z.string().max(500).nullable().optional() }))
+    .max(5000)
+    .optional(),
+  priceOverrides: z.record(z.string(), z.number()).optional(),
+})
+
+/** Upserts one chunk of a backup. Players already on this site are overwritten with the backup copy. */
+export const ownerImportBackup = createServerFn({ method: "POST" })
+  .inputValidator((d) => importSchema.parse(d))
+  .handler(async ({ data }) => {
+    await requireOwner(data.initData)
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server")
+    if (data.players.length) {
+      const { error } = await supabaseAdmin.from("players").upsert(
+        data.players.map((p) => ({
+          tg_id: p.tg_id,
+          first_name: p.first_name ?? "",
+          username: p.username ?? null,
+          state: p.state as never,
+          ...(p.created_at ? { created_at: p.created_at } : {}),
+          updated_at: new Date().toISOString(),
+        })),
+      )
+      if (error) throw new Error(error.message)
+    }
+    if (data.promoCodes?.length) {
+      const { error } = await supabaseAdmin.from("promo_codes").upsert(data.promoCodes)
+      if (error) throw new Error(error.message)
+    }
+    if (data.promoRedemptions?.length) {
+      const { error } = await supabaseAdmin.from("promo_redemptions").upsert(data.promoRedemptions, { ignoreDuplicates: true })
+      if (error) throw new Error(error.message)
+    }
+    if (data.pendingGrants?.length) {
+      const { error } = await supabaseAdmin.from("pending_grants").insert(data.pendingGrants.map((g) => ({ ...g, note: g.note ?? null })))
+      if (error) throw new Error(error.message)
+    }
+    if (data.priceOverrides && Object.keys(data.priceOverrides).length) {
+      const { error } = await supabaseAdmin.from("app_settings").update({ price_overrides: data.priceOverrides, updated_at: new Date().toISOString() }).eq("id", 1)
+      if (error) throw new Error(error.message)
+    }
+    return { ok: true, players: data.players.length }
+  })
